@@ -50,7 +50,7 @@ NOTES_PATH = "./data/notes"
 # small enough to run fast on CPU, accurate enough for retrieval tasks.
 embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
-def ingest_pdf(filepath: str):
+def ingest_pdf(filepath: str, collection_name: str = "course_notes"):
     # pymupdf4llm extracts the PDF page by page and returns a list of dicts.
     # page_chunks=True means one dict per page instead of one big string.
     # each dict has: 
@@ -107,7 +107,8 @@ def ingest_pdf(filepath: str):
     db = Chroma.from_documents(
         chunks,
         embeddings,
-        persist_directory=CHROMA_PATH
+        persist_directory=CHROMA_PATH,
+        collection_name=collection_name # new, organizes vectors in ChromaDB into named collections
     )
 
     print(f"Ingested {len(chunks)} chunks from {filepath}")
