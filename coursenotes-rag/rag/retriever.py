@@ -21,7 +21,6 @@ from langchain.agents.middleware import dynamic_prompt, ModelRequest
 from dotenv import load_dotenv
 import os
 
-from streamlit import user
 
 load_dotenv()
 
@@ -56,10 +55,11 @@ def build_chain():
     # and injects the retrieved chunks into the system prompt as context.
     # this is a single-pass chain — one retrieval call, one LLM call per query.
 
-    @dynamic_prompt # decorator means the function 'prompt_with_context' runs before every LLM call, and can modify the system prompt based on the current query
+    @dynamic_prompt # decorator which means the function 'prompt_with_context' runs before every LLM call, and can modify the system prompt based on the current query
+    # Dynamic prompt gets context before calling the LLM
+    # The alternative is give the LLM a tool, which allows it to decide whether or not to call to retrieve context
+    # but for a simple Q&A bot we want to always retrieve context and not give the model the option to skip retrieval, which is why I chose dynamic_prompt middleware over a tool.
     def prompt_with_context(request: ModelRequest) -> str:
-        #
-
         last_query = request.state["messages"][-1].text
         # request.state["messages"] is the full conversation history
         # [-1] is the last message/user's current question
@@ -92,5 +92,7 @@ def build_chain():
         )
 
     # no tools — pure chain, no agentic decision making
+    # this is an object that can be called, with the convo loop built in, history and everything
+    # Honestly a big abstraction 
     agent = create_agent(model, tools=[], middleware=[prompt_with_context])
     return agent, db  # return db so we can access source docs for highlighting
