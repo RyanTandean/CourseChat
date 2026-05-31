@@ -3,7 +3,7 @@
 # Why this exists:
 # create_agent has no built-in memory — every agent.stream() call is stateless.
 # Without this, the agent forgets everything between messages:
-#   - "explain that differently" has no referent
+#   - "explain that differently" has no context of what "that" is referring to, so it fails
 #   - "give me an example of what you just described" fails
 #   - follow-up questions are impossible
 #
