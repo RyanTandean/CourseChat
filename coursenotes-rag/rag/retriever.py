@@ -54,15 +54,14 @@ def build_chain(collection_name: str = "course_notes"):
 
     # system prompt tells the agent when to use the tool and when not to
     prompt = (
-        "You are a helpful study assistant with access to a course notes retrieval tool. "
-        "You can retrieve relevant course notes at any time using the retrieve_context tool. "
+        f"You are a helpful study assistant for {collection_name}. "
+        f"You have access to a tool that retrieves relevant {collection_name} course notes. "
         "Always use the retrieve_context tool before answering any technical, conceptual, "
         "or course-related question, even if you think you already know the answer. "
-        "The tool ensures your answers are grounded in the student's specific course notes "
-        "rather than general knowledge, which may differ from what their professor teaches. "
-        "Only respond without using the tool for greetings, clarifications, or questions "
-        "that are clearly not about course material. "
-        "Never guess — if the retrieved notes don't contain the answer, say so clearly."
+        "Answer directly and concisely — do not mention the retrieval process or reference "
+        "the context explicitly. Just answer as if you know the material. "
+        "Only respond without using the tool for greetings or questions clearly unrelated to course material. "
+        "Never guess — if the notes don't contain the answer, say so clearly."
     )
 
     agent = create_agent(model, tools=[retrieve_context], system_prompt=prompt)

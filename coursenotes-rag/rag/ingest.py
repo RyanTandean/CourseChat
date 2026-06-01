@@ -50,7 +50,7 @@ NOTES_PATH = "./data/notes"
 # small enough to run fast on CPU, accurate enough for retrieval tasks.
 embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
-def ingest_pdf(filepath: str, collection_name: str = "course_notes"):
+def ingest_pdf(filepath: str, collection_name: str = "course_notes", original_filename: str = None):
     # pymupdf4llm extracts the PDF page by page and returns a list of dicts.
     # page_chunks=True means one dict per page instead of one big string.
     # each dict has: 
@@ -72,7 +72,7 @@ def ingest_pdf(filepath: str, collection_name: str = "course_notes"):
         Document(
             page_content=page["text"],
             metadata={
-                "source": os.path.basename(filepath),
+                "source": original_filename or os.path.basename(filepath),
                 "page": page["metadata"]["page_number"],
                 "section": page["toc_items"][0][1] if page["toc_items"] else ""
             }
