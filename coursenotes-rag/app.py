@@ -11,6 +11,7 @@ from rag.history import load_history, save_history, clear_history, list_courses
 import chromadb
 import tempfile
 import re
+import fitz  # PyMuPDF — used to render PDF pages as images for the sources panel
 
 # strip_markdown is currently unused — was previously used to flatten excerpt text
 # before passing to st.caption(). Replaced with st.markdown() so pymupdf4llm's
@@ -95,6 +96,71 @@ def normalise_latex(text: str) -> str:
     text = re.sub(r'\\\((.+?)\\\)', r'$\1$', text, flags=re.DOTALL)
 
     return text
+
+# ── Page image rendering ─────────────────────────────────────────────────────
+#
+# The sources panel shows the actual PDF page a retrieved chunk came from.
+# This gives the user visual context — they can see the original layout,
+# diagrams, and any equations that weren't captured as text.
+#
+# How it works:
+#   1. Every chunk in ChromaDB has metadata: {source: filename, page: n}
+#   2. At ingest time, the PDF is saved to data/notes/<filename>
+#   3. At query time, we open that PDF with fitz, render the specific page
+#      to a pixmap (an in-memory image), convert to PNG bytes, and pass to
+#      st.image() which displays it inline in the sources expander.
+#
+# fitz.Matrix(zoom, zoom): a transformation matrix that scales the render.
+#   zoom=2 means 2x the native PDF resolution (72 DPI → 144 DPI).
+#   Higher zoom = sharper image but larger bytes. 2x is a good balance.
+#
+# Deployment note: this requires the PDF to be on the local filesystem.
+# For production deployment on ephemeral hosts (Render, Streamlit Cloud),
+# replace the fitz.open(pdf_path) with an S3 fetch and store the object
+# key in chunk metadata instead of the local filename.
+
+PDF_STORAGE_PATH = "./data/notes"
+
+def render_pdf_page(source_filename: str, page_number: int) -> bytes | None:
+    """Render a specific PDF page to PNG bytes for display with st.image().
+
+    Args:
+        source_filename: the PDF filename as stored in chunk metadata (e.g. "Enumeration-1.pdf")
+        page_number:     1-indexed page number from chunk metadata
+
+    Returns:
+        PNG image bytes, or None if the PDF file doesn't exist or rendering fails.
+        Callers should check for None and skip st.image() gracefully.
+    """
+    pdf_path = os.path.join(PDF_STORAGE_PATH, source_filename)
+
+    if not os.path.exists(pdf_path):
+        # PDF not found — either the file was deleted, or this is an older course
+        # indexed before page rendering was added. Fail silently.
+        return None
+
+    try:
+        doc  = fitz.open(pdf_path)
+        # fitz uses 0-indexed pages; chunk metadata uses 1-indexed
+        page = doc[page_number - 1]
+
+        # render at 1.5x resolution — crisp enough for reading, smaller than 2x
+        # Matrix(1.5, 1.5) scales both x and y by 1.5
+        zoom   = 1.5
+        matrix = fitz.Matrix(zoom, zoom)
+        pixmap = page.get_pixmap(matrix=matrix)
+
+        # tobytes("png") converts the pixmap to PNG bytes in memory —
+        # no temp file needed, st.image() accepts raw bytes directly
+        image_bytes = pixmap.tobytes("png")
+        doc.close()
+        return image_bytes
+
+    except Exception as e:
+        # page out of range, corrupted PDF, etc. — fail silently
+        print(f"[page render] failed to render {source_filename} page {page_number}: {e}")
+        return None
+
 
 ##################### Page Config + CSS injection ############################
 # Runs once every rerun, sets the overall styling
@@ -214,6 +280,16 @@ with st.sidebar:
         label_visibility="collapsed"
     )
 
+    # vision enrichment toggle — shown next to the uploader so the user can
+    # decide before clicking Upload & Index.
+    # on: Groq vision model describes embedded images (equations, diagrams) — slower
+    # off: image placeholders stay in the index — faster, fine for non-math PDFs
+    use_vision = st.checkbox(
+        "Vision enrichment (math PDFs)",
+        value=True,
+        help="Uses AI vision to extract equations from images. Adds ~2s per image. Turn off for non-math PDFs."
+    )
+
     if st.button("Upload & Index", use_container_width=True, type="primary"):
         if not new_course:
             st.error("Enter a course name first.")
@@ -221,18 +297,19 @@ with st.sidebar:
             st.error("Upload at least one PDF.")
         else:
             with st.spinner(f"Indexing {len(uploaded_files)} file(s)..."):
-                # track which files succeeded and which failed so we can
-                # give the user a specific error rather than a generic crash
+                # track which files succeeded, were skipped, and which failed
                 failed = []
+                skipped = []
                 for uploaded_file in uploaded_files:
                     try:
                         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
                             tmp.write(uploaded_file.read())
                             tmp_path = tmp.name
-                        ingest_pdf(tmp_path, collection_name=new_course, original_filename=uploaded_file.name)
+                        _, was_skipped, _ = ingest_pdf(tmp_path, collection_name=new_course, original_filename=uploaded_file.name, use_vision=use_vision)
                         os.unlink(tmp_path)
+                        if was_skipped:
+                            skipped.append(uploaded_file.name)
                     except Exception as e:
-                        # clean up the temp file if ingest failed partway through
                         if os.path.exists(tmp_path):
                             os.unlink(tmp_path)
                         failed.append((uploaded_file.name, str(e)))
@@ -241,10 +318,14 @@ with st.sidebar:
                 for filename, error in failed:
                     st.error(f"Failed to index {filename}: {error}")
             else:
+                if skipped:
+                    for filename in skipped:
+                        st.info(f"{filename} was already indexed — skipped.")
                 if new_course not in st.session_state.courses:
                     st.session_state.courses.append(new_course)
                     save_history(new_course, [])
-                st.success(f"Ready — {new_course} indexed.")
+                if len(skipped) < len(uploaded_files):
+                    st.success(f"Ready — {new_course} indexed.")
                 switch_course(new_course)
                 st.rerun()
 
@@ -321,6 +402,14 @@ else:
                             # render the excerpt as markdown so pymupdf4llm's extracted
                             # formatting (bullet points, bold, headers) displays correctly
                             st.markdown(src["excerpt"])
+                        # render the actual PDF page as an image so the user can see
+                        # the original layout, diagrams, and any visual context.
+                        # render_pdf_page returns None if the PDF isn't available —
+                        # silently skips the image rather than showing an error.
+                        page_img = render_pdf_page(src["source"], src["page"])
+                        if page_img:
+                            with st.expander(f"Page {src['page']} image"):
+                                st.image(page_img, width="stretch")
                         st.divider()
 
     # chat input
@@ -393,7 +482,8 @@ else:
                     #   - the LLM returned a malformed response
                     # show a friendly error in the placeholder slot rather than a raw traceback
                     response_placeholder.error(f"Something went wrong while generating a response: {e}")
-                    return
+                    full_response = ""
+                    final_state = None
 
                 sources = []
                 if final_state:
@@ -429,6 +519,12 @@ else:
                             # render the excerpt as markdown so pymupdf4llm's extracted
                             # formatting (bullet points, bold, headers) displays correctly
                             st.markdown(src["excerpt"])
+                            # render the actual PDF page as an image — gives visual context
+                            # alongside the text excerpt. silently skipped if PDF unavailable.
+                            page_img = render_pdf_page(src["source"], src["page"])
+                            if page_img:
+                                with st.expander(f"Page {src['page']} image"):
+                                    st.image(page_img, width="stretch")
                             st.divider() # big horizontal line
 
             # Append history

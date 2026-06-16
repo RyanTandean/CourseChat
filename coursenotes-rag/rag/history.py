@@ -15,6 +15,7 @@
 
 import json
 import os
+import chromadb
 
 CONVERSATIONS_PATH = "./data/conversations"
 
@@ -49,13 +50,41 @@ def clear_history(course_name: str) -> None:
         os.remove(path)
 
 def list_courses() -> list[str]:
-    # scan the conversations directory to find all courses with saved history
-    # used to populate the sidebar on startup
-    # returns course names with underscores converted back to spaces
-    if not os.path.exists(CONVERSATIONS_PATH):
+    # ── Why ChromaDB is the source of truth, not the conversations folder ────
+    #
+    # Previously this function scanned data/conversations/ for JSON files.
+    # That caused two silent bugs:
+    #
+    #   1. Ingest a course, don't chat yet → no JSON file created → course never
+    #      appears in the sidebar even though vectors are fully indexed in ChromaDB
+    #
+    #   2. Delete or lose the JSON file (e.g. clearing the conversations folder)
+    #      → course vanishes from the sidebar, but all its vectors are still in
+    #      ChromaDB taking up space — orphaned and inaccessible
+    #
+    # The fix: use ChromaDB's collection list as the authoritative source.
+    # A course exists if and only if it has a ChromaDB collection. The JSON history
+    # file is optional — if it's missing we just start with an empty conversation.
+    #
+    # chromadb.PersistentClient loads the same on-disk database that ingest.py
+    # writes to. client.list_collections() returns all named collections.
+    # Each collection name was set to the course name at ingest time (with spaces
+    # replaced by underscores to satisfy ChromaDB's naming rules — we reverse that
+    # here to get the display name back).
+    #
+    # If ChromaDB doesn't exist yet (fresh install, no courses ingested) we return
+    # an empty list rather than crashing.
+
+    CHROMA_PATH = "./chroma_db"
+
+    try:
+        client = chromadb.PersistentClient(path=CHROMA_PATH)
+        # list_collections() returns a list of Collection objects
+        # each has a .name attribute — the collection name set at ingest time
+        collections = client.list_collections()
+        # reverse the underscore substitution applied at ingest time so the
+        # display name in the sidebar matches what the user originally typed
+        return [col.name.replace("_", " ") for col in collections]
+    except Exception:
+        # ChromaDB directory doesn't exist yet or is unreadable — no courses yet
         return []
-    return [
-        f.replace(".json", "").replace("_", " ")
-        for f in os.listdir(CONVERSATIONS_PATH)
-        if f.endswith(".json")
-    ]
