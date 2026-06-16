@@ -16,6 +16,70 @@ def strip_markdown(text: str) -> str:
     text = re.sub(r'\n{2,}', ' ', text)
     return text.strip()
 
+# ── LaTeX delimiter normalisation ────────────────────────────────────────────
+#
+# Why this exists:
+# Streamlit's st.markdown has BUILT-IN KaTeX rendering — no JS injection needed.
+# It recognises two delimiter styles:
+#   $...$   — inline math   (e.g.  $x^2 + y^2 = r^2$)
+#   $$...$$  — block/display math  (e.g.  $$\int_0^\infty e^{-x} dx = 1$$)
+#
+# The problem: LLMs trained on LaTeX documents often produce a DIFFERENT
+# delimiter style — the native LaTeX convention:
+#   \(...\)  — inline math
+#   \[...\]  — display/block math
+#
+# Streamlit does NOT recognise \(...\) or \[...\], so they render as raw text
+# with backslashes and parentheses instead of rendered equations.
+#
+# The fix is a preprocessing step: convert \(...\) → $...$ and \[...\] → $$...$$
+# before passing the string to st.markdown. This happens entirely in Python —
+# no JavaScript injection, no iframes, no hacks.
+#
+# Regex breakdown for INLINE: re.sub(r'\\\((.+?)\\\)', r'$\1$', text, flags=re.DOTALL)
+#   \\\(     — matches a literal \( in the string  (two backslashes: one to escape
+#              the regex engine, one for the Python string literal)
+#   (.+?)    — capture group: the actual math content, non-greedy so it stops
+#              at the FIRST \) rather than consuming everything up to the last one
+#   \\\)     — matches a literal \)
+#   r'$\1$'  — replacement: wraps the captured group in Streamlit's $...$ delimiters
+#   re.DOTALL — makes . match newlines too, so multi-line inline expressions work
+#
+# Regex breakdown for BLOCK: re.sub(r'\\\[(.+?)\\\]', r'$$\1$$', text, flags=re.DOTALL)
+#   Same idea but with \[...\] → $$...$$
+#   Block math is typically multi-line (e.g. a matrix), so re.DOTALL is critical.
+#
+# Order matters: process block delimiters BEFORE inline. If you did inline first
+# and the text contained something like \[\frac{1}{2}\], the \( inside \frac
+# would not actually be a delimiter, but doing block first avoids any ambiguity.
+#
+# Reference: https://docs.streamlit.io/develop/api-reference/text/st.latex
+# (st.markdown uses the same underlying KaTeX renderer as st.latex)
+
+def normalise_latex(text: str) -> str:
+    """Convert LLM-style LaTeX delimiters to Streamlit-compatible delimiters.
+
+    LLMs trained on academic text commonly output:
+        \\[...\\]  for display/block math
+        \\(...\\)  for inline math
+
+    Streamlit's st.markdown KaTeX renderer expects:
+        $$...$$   for display/block math
+        $...$     for inline math
+
+    This function converts between the two styles so math renders
+    correctly without any JavaScript or custom components.
+    """
+    # Step 1: block math — \[...\] → $$...$$
+    # Must run before inline so that any \( sequences inside a block
+    # expression are not accidentally matched as inline delimiters.
+    text = re.sub(r'\\\[(.+?)\\\]', r'$$\1$$', text, flags=re.DOTALL)
+
+    # Step 2: inline math — \(...\) → $...$
+    text = re.sub(r'\\\((.+?)\\\)', r'$\1$', text, flags=re.DOTALL)
+
+    return text
+
 st.set_page_config(
     page_title="CourseChat",
     page_icon="📖",
@@ -179,7 +243,11 @@ else:
     # render existing messages
     for msg in history:
         with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
+            # Normalise LaTeX delimiters before rendering so that math from
+            # previous conversations displays correctly on reload.
+            # User messages are passed through too — harmless if they contain
+            # no math, and correct if they typed a \(...\) expression.
+            st.markdown(normalise_latex(msg["content"]))
             if msg.get("sources"):
                 with st.expander("Sources"):
                     for src in msg["sources"]:
@@ -213,7 +281,12 @@ else:
                 last_msg = step["messages"][-1]
                 if last_msg.type == "ai" and not last_msg.tool_calls:
                     full_response = last_msg.content
-                    response_placeholder.markdown(full_response)
+                    # Normalise delimiters on every streaming chunk so the math
+                    # renders correctly as the response arrives, not just at the end.
+                    # We normalise the full accumulated string each time rather than
+                    # the delta chunk, because a delimiter like \( might arrive in
+                    # one chunk and \) in the next — the regex needs the complete pair.
+                    response_placeholder.markdown(normalise_latex(full_response))
 
             sources = []
             if final_state:
@@ -240,5 +313,8 @@ else:
                         st.divider()
 
         history.append({"role": "user", "content": prompt})
-        history.append({"role": "assistant", "content": full_response, "sources": sources})
+        # Store the normalised version so that on reload, st.markdown renders
+        # the already-converted $...$ delimiters rather than re-running the
+        # conversion on \(...\) strings that would have been doubly converted.
+        history.append({"role": "assistant", "content": normalise_latex(full_response), "sources": sources})
         save_history(course, history)
