@@ -52,7 +52,12 @@ def build_chain(collection_name: str = "course_notes"):
     # temp = 0 means deterministic output
     model = ChatGroq(model="llama-3.3-70b-versatile", temperature=0)
 
-    # system prompt tells the agent when to use the tool and when not to
+    # system prompt tells the agent when to use the tool and when not to.
+    # The LaTeX instruction is important: without it the model defaults to ASCII
+    # math notation (x^2, ^k, Σ) which Streamlit cannot render as formatted equations.
+    # By explicitly requesting \(...\) and \[...\] delimiters, the model produces
+    # proper LaTeX that our normalise_latex() function in app.py then converts to
+    # Streamlit's $...$ / $$...$$ format before rendering with KaTeX.
     prompt = (
         f"You are a helpful study assistant for {collection_name}. "
         f"You have access to a tool that retrieves relevant {collection_name} course notes. "
@@ -61,7 +66,13 @@ def build_chain(collection_name: str = "course_notes"):
         "Answer directly and concisely — do not mention the retrieval process or reference "
         "the context explicitly. Just answer as if you know the material. "
         "Only respond without using the tool for greetings or questions clearly unrelated to course material. "
-        "Never guess — if the notes don't contain the answer, say so clearly."
+        "Never guess — if the notes don't contain the answer, say so clearly. "
+        "When your answer contains any mathematical expressions, equations, or formulas, "
+        "always write them in LaTeX notation. "
+        "Use \\(...\\) for inline math (e.g. the variable \\(x\\)) "
+        "and \\[...\\] for display/block equations on their own line "
+        "(e.g. \\[F(x) = \\sum_{i=1}^{k} x^i\\]). "
+        "Never use plain ASCII math notation like x^2 or (Sigma x^i)^k."
     )
 
     agent = create_agent(model, tools=[retrieve_context], system_prompt=prompt)
