@@ -98,7 +98,7 @@ def normalise_latex(text: str) -> str:
 
     return text
 
-# ── Page image rendering ─────────────────────────────────────────────────────
+######## Page image rendering ##############################
 #
 # The sources panel shows the actual PDF page a retrieved chunk came from.
 # This gives the user visual context — they can see the original layout,
