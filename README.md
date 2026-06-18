@@ -116,12 +116,13 @@ coursenotes-rag/
 
 **Retrieval-Augmented Generation**
 RAG outperforms pure LLM generation for domain-specific knowledge by constraining the model to retrieved context, reducing hallucination and making answers verifiable. Key engineering decisions: chunk size (larger = more context per chunk, noisier retrieval), overlap (more overlap = better cross-boundary coherence), and k (more chunks = more coverage, higher token cost).
+Sliding window conversation history caps context to the last N turns to prevent token limit degradation over long sessions, trading full recall for stable inference cost.
 
 **Tool-based vs middleware retrieval**
-Two approaches to RAG with LangChain agents: always-retrieve middleware (intercepts every LLM call and injects context) vs tool-based retrieval (agent decides when to call the retrieval tool). Middleware is simpler but retrieves even for greetings. Tool-based is more natural — the agent only retrieves when the question warrants it.
+Two approaches to RAG with LangChain agents: always-retrieve middleware (intercepts every LLM call and injects context regardless of query type) vs tool-based retrieval (agent decides when to invoke the retrieval tool based on the query). Middleware is simpler to implement and guarantees context is always present, but wastes tokens on greetings, clarifications, and follow-ups that don't need retrieval. Tool-based is more natural, since the agent reasons about whether the question warrants a vector store lookup, which reduces unnecessary retrieval calls and keeps the context window focused on relevant chunks. The tradeoff is that tool-based retrieval adds an extra reasoning step and can occasionally miss retrieval on ambiguous queries.
 
 **Vector databases and embeddings**
-Embeddings transform unstructured text into dense vector representations where semantic similarity translates into geometric proximity in a high-dimensional space. During runtime, user queries are embedded using the same `all-MiniLM-L6-v2` model and a cosine similarity nearest-neighbor search is performed against the ChromaDB store. This highlighted how critical clean text ingestion and metadata filtering are — poorly formatted chunks degrade retrieval quality regardless of model capability.
+Embeddings transform unstructured text into dense vector representations where semantic similarity translates into geometric proximity in a high-dimensional space. During runtime, user queries are embedded using the same `all-MiniLM-L6-v2` model and a cosine similarity nearest-neighbor search is performed against the ChromaDB store. This highlighted how critical clean text ingestion and metadata filtering are, since poorly formatted chunks degrade retrieval quality regardless of model capability.
 
 ---
 
