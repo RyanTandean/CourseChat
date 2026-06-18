@@ -49,6 +49,59 @@ def clear_history(course_name: str) -> None:
     if os.path.exists(path):
         os.remove(path)
 
+def list_files(course_name: str) -> list[str]:
+    """Return the distinct filenames indexed in a course's ChromaDB collection.
+
+    Each chunk stored at ingest time has a 'source' metadata field set to the
+    original PDF filename. We query the collection for all chunks, pull the
+    'source' field from each, and deduplicate — giving us the list of PDFs
+    currently indexed for this course.
+
+    Returns an empty list if the collection doesn't exist or has no chunks.
+    """
+    CHROMA_PATH = "./chroma_db"
+    try:
+        client = chromadb.PersistentClient(path=CHROMA_PATH)
+        collection = client.get_collection(course_name.replace(" ", "_"))
+        # get() with no filter returns all chunks; include=["metadatas"] skips
+        # fetching embeddings and documents — we only need the metadata dicts
+        result = collection.get(include=["metadatas"])
+        sources = {m["source"] for m in result["metadatas"] if "source" in m}
+        return sorted(sources)
+    except Exception:
+        return []
+
+
+def delete_file(course_name: str, filename: str) -> None:
+    """Delete all chunks belonging to a single PDF from a course's collection.
+
+    Uses ChromaDB's delete() with a 'where' metadata filter on the 'source'
+    field — only chunks from this file are removed, leaving all other files
+    in the collection untouched.
+
+    Also removes the saved PDF from data/notes/ so the sources panel doesn't
+    try to render pages from a file that's no longer indexed.
+    """
+    CHROMA_PATH    = "./chroma_db"
+    NOTES_PATH     = "./data/notes"
+
+    try:
+        client = chromadb.PersistentClient(path=CHROMA_PATH)
+        collection = client.get_collection(course_name.replace(" ", "_"))
+        # delete all chunks whose 'source' metadata matches this filename
+        collection.delete(where={"source": filename})
+    except Exception as e:
+        print(f"[delete_file] ChromaDB delete failed for {filename}: {e}")
+
+    # remove the saved PDF so page rendering doesn't find a stale file
+    pdf_path = os.path.join(NOTES_PATH, filename)
+    if os.path.exists(pdf_path):
+        try:
+            os.remove(pdf_path)
+        except Exception as e:
+            print(f"[delete_file] could not remove PDF {pdf_path}: {e}")
+
+
 def list_courses() -> list[str]:
     # ── Why ChromaDB is the source of truth, not the conversations folder ────
     #

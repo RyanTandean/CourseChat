@@ -7,7 +7,7 @@ import streamlit as st
 import os
 from rag.retriever import build_chain
 from rag.ingest import ingest_pdf
-from rag.history import load_history, save_history, clear_history, list_courses
+from rag.history import load_history, save_history, clear_history, list_courses, list_files, delete_file
 import chromadb
 import tempfile
 import re
@@ -354,6 +354,31 @@ with st.sidebar:
 
     if st.session_state.active_course:
         st.divider()
+
+        # ── Indexed files ─────────────────────────────────────────────────────
+        # Show every PDF currently indexed for the active course.
+        # Each file has an ✕ button that deletes only that file's chunks from
+        # ChromaDB and removes the saved PDF — leaving other files intact.
+        # The cached agent is evicted so the next query rebuilds against the
+        # updated collection rather than serving stale vectors.
+        with st.expander("Indexed files"):
+            files = list_files(st.session_state.active_course)
+            if not files:
+                st.caption("No files indexed yet.")
+            else:
+                for fname in files:
+                    col_f, col_x = st.columns([5, 1])
+                    with col_f:
+                        st.caption(fname)
+                    with col_x:
+                        if st.button("✕", key=f"delfile_{fname}", help=f"Remove {fname}"):
+                            delete_file(st.session_state.active_course, fname)
+                            # evict cached agent — its db reference now points to
+                            # a collection that no longer has this file's vectors
+                            if st.session_state.active_course in st.session_state.agents:
+                                del st.session_state.agents[st.session_state.active_course]
+                            st.rerun()
+
         with st.expander("Settings"):
             if st.button("Clear conversation", use_container_width=True):
                 clear_history(st.session_state.active_course)
@@ -424,13 +449,27 @@ else:
         with st.chat_message("user"):
             st.markdown(prompt)
 
-        # Recall that agent is stateless, has no memory of previous calls so we need to 
+        # Recall that agent is stateless, has no memory of previous calls so we need to
         # reconstruct the full convo every time by saving history and sending one huge message back to
-        # the agent
-        # TODO: Consider summarization, vector memory, sliding window for really long chats
+        # the agent.
+        #
+        # Sliding window: cap the history sent to the agent at the most recent
+        # HISTORY_WINDOW message pairs (user + assistant = 2 messages per pair).
+        # This prevents the context window from growing unboundedly over long sessions
+        # and keeps token usage stable. The full history is still saved to disk and
+        # rendered in the UI — only the agent's input is trimmed.
+        #
+        # Why 10 pairs (20 messages)?
+        # Study sessions are usually focused on one topic at a time. Referencing
+        # context from more than 10 exchanges back is rare, and the tradeoff
+        # (losing old context vs. hitting token limits / degraded answers) favours
+        # the window. Increase HISTORY_WINDOW if your sessions are longer.
+        HISTORY_WINDOW = 10  # message pairs to keep (1 pair = 1 user + 1 assistant)
+        windowed_history = history[-(HISTORY_WINDOW * 2):]
+
         agent_messages = [
             {"role": msg["role"], "content": msg["content"]}
-            for msg in history
+            for msg in windowed_history
         ] + [{"role": "user", "content": prompt}]
 
         agent, db = get_agent(course)
