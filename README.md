@@ -1,4 +1,4 @@
-# CourseChat — RAG Study Assistant
+# CourseChat | RAG Study Assistant
 
 A retrieval-augmented generation (RAG) chatbot that answers questions grounded in your own course notes, with source highlighting so you can see exactly where every answer comes from.
 
