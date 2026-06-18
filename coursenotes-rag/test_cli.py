@@ -8,10 +8,10 @@ agent, db = build_chain()
 print("CourseChat CLI Test — type 'quit' to exit\n")
 
 while True:
-    question = input("You: ") # read from std in, the user's question
+    question = input("You: ")  # read from std in, the user's question
     if question.lower() == "quit":
         break
-        
+
     # agent.stream() runs the agent step by step, yielding the full state after each step.
     # unlike agent.invoke() which waits for the complete response, stream() lets you
     # see intermediate steps as they happen — useful for debugging and for streaming
@@ -30,7 +30,7 @@ while True:
     for step in agent.stream(
         {"messages": [{"role": "user", "content": question}]},
         stream_mode="values",
-    ):  
+    ):
         # pretty_print() is a LangChain helper that formats messages cleanly in terminal
         # step["messages"] contains the entire history, but we only want to print the most recent message at each step, which is [-1]
         final_state = step # keeps getting overwritten each step, but at the end of the loop it will be the final state after the full response is generated
@@ -42,8 +42,8 @@ while True:
         if msg.type == "ai": # only print assistant messages, not tool calls or human messages
             msg.pretty_print()
     
-     # final_state is the full message history after the complete response is generated
-     # final_state is the last snapshot from the stream — the most complete state.
+    # final_state is the full message history after the complete response is generated
+    # final_state is the last snapshot from the stream — the most complete state.
     
     if final_state:
         for msg in final_state["messages"]:

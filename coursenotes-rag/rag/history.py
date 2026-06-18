@@ -16,8 +16,7 @@
 import json
 import os
 import chromadb
-
-CONVERSATIONS_PATH = "./data/conversations"
+from rag.config import CHROMA_PATH, CONVERSATIONS_PATH
 
 def _course_path(course_name: str) -> str:
     # sanitize course name to a safe filename
@@ -31,16 +30,23 @@ def load_history(course_name: str) -> list[dict]:
     path = _course_path(course_name)
     if not os.path.exists(path):
         return []
-    with open(path, "r") as f:
-        return json.load(f)
+    try:
+        with open(path, "r") as f:
+            return json.load(f)
+    except json.JSONDecodeError as e:
+        print(f"[load_history] could not parse {path}: {e}")
+        return []
 
 def save_history(course_name: str, messages: list[dict]) -> None:
     # persist conversation history to disk after every message
     # creates the conversations directory if it doesn't exist yet
     os.makedirs(CONVERSATIONS_PATH, exist_ok=True)
     path = _course_path(course_name)
-    with open(path, "w") as f:
-        json.dump(messages, f, indent=2)
+    try:
+        with open(path, "w") as f:
+            json.dump(messages, f, indent=2)
+    except OSError as e:
+        print(f"[save_history] could not write {path}: {e}")
 
 def clear_history(course_name: str) -> None:
     # delete the history file for a course — used by the "clear conversation" button
@@ -59,7 +65,6 @@ def list_files(course_name: str) -> list[str]:
 
     Returns an empty list if the collection doesn't exist or has no chunks.
     """
-    CHROMA_PATH = "./chroma_db"
     try:
         client = chromadb.PersistentClient(path=CHROMA_PATH)
         collection = client.get_collection(course_name.replace(" ", "_"))
@@ -127,8 +132,6 @@ def list_courses() -> list[str]:
     #
     # If ChromaDB doesn't exist yet (fresh install, no courses ingested) we return
     # an empty list rather than crashing.
-
-    CHROMA_PATH = "./chroma_db"
 
     try:
         client = chromadb.PersistentClient(path=CHROMA_PATH)

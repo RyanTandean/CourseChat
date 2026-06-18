@@ -12,6 +12,7 @@ import chromadb
 import tempfile
 import re
 import fitz  # PyMuPDF — used to render PDF pages as images for the sources panel
+from rag.config import CHROMA_PATH, PDF_STORAGE_PATH
 
 # strip_markdown is currently unused — was previously used to flatten excerpt text
 # before passing to st.caption(). Replaced with st.markdown() so pymupdf4llm's
@@ -119,8 +120,6 @@ def normalise_latex(text: str) -> str:
 # replace the fitz.open(pdf_path) with an S3 fetch and store the object
 # key in chunk metadata instead of the local filename.
 
-PDF_STORAGE_PATH = "./data/notes"
-
 def render_pdf_page(source_filename: str, page_number: int) -> bytes | None:
     """Render a specific PDF page to PNG bytes for display with st.image().
 
@@ -157,8 +156,8 @@ def render_pdf_page(source_filename: str, page_number: int) -> bytes | None:
         return image_bytes
 
     except Exception as e:
-        # page out of range, corrupted PDF, etc. — fail silently
-        print(f"[page render] failed to render {source_filename} page {page_number}: {e}")
+        # page out of range, corrupted PDF, etc. — fail gracefully
+        print(f"[page render] {source_filename} page {page_number} could not be rendered: {e}")
         return None
 
 
@@ -194,8 +193,6 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
-
-CHROMA_PATH = "./chroma_db"
 
 ######### session state ################
 # 
@@ -242,7 +239,7 @@ def get_agent(course_name: str):
             #   - HuggingFace embedding model fails to download (no internet, cache issue)
             #   - GROQ_API_KEY is missing from .env
             # return None so the caller can show a user-facing error instead of crashing
-            st.error(f"Failed to load agent for {course_name}: {e}")
+            st.error(f"Could not load {course_name}. Check that the course is indexed and your API key is set. Details: {e}")
             return None
     return st.session_state.agents[course_name]
 
@@ -254,8 +251,8 @@ def delete_course(course_name: str):
     try:
         client = chromadb.PersistentClient(path=CHROMA_PATH)
         client.delete_collection(course_name.replace(" ", "_"))
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[delete_course] could not delete collection for {course_name}: {e}")
     if course_name in st.session_state.agents:
         del st.session_state.agents[course_name]
     st.session_state.courses = [c for c in st.session_state.courses if c != course_name]

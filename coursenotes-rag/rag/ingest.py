@@ -57,7 +57,7 @@ os.environ["HUGGINGFACEHUB_API_TOKEN"] = os.getenv("HF_TOKEN", "")
 CHROMA_PATH = "./chroma_db"
 NOTES_PATH  = "./data/notes"
 
-# ── Page image storage ────────────────────────────────────────────────────────
+############# Page image storage ####################
 #
 # At query time, the sources panel can render the actual PDF page the retrieved
 # chunk came from. To do this we need the original PDF available on disk.
@@ -74,7 +74,7 @@ NOTES_PATH  = "./data/notes"
 # store the S3 key in ChromaDB metadata instead of the local path.
 PDF_STORAGE_PATH = "./data/notes"
 
-# ── Vision model config ───────────────────────────────────────────────────────
+################# Vision model config #######################
 #
 # meta-llama/llama-4-scout-17b-16e-instruct is Groq's current vision model.
 # It accepts messages with image_url content blocks containing base64-encoded images.
@@ -103,7 +103,7 @@ embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 groq_client = Groq()
 
 
-# ── Vision helper ─────────────────────────────────────────────────────────────
+################# Vision helper #######################
 
 def describe_page_images(page_text: str, fitz_page: fitz.Page, fitz_doc: fitz.Document) -> str:
     """Replace pymupdf4llm image placeholders with vision model descriptions.

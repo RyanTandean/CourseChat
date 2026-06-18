@@ -47,16 +47,15 @@ from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from dotenv import load_dotenv
 import os
+from rag.config import CHROMA_PATH, EMBEDDING_MODEL_NAME
 
 load_dotenv()
 os.environ["HUGGINGFACEHUB_API_TOKEN"] = os.getenv("HF_TOKEN", "")
 
-CHROMA_PATH = "./chroma_db"
-
 # ── same embedding model as ingest.py and retriever.py ───────────────────────
 # MUST be identical — if the model differs, the query vectors live in a different
 # vector space than the stored chunk vectors and cosine similarity breaks down.
-embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_NAME)
 
 # ── test cases ────────────────────────────────────────────────────────────────
 # Written from Enumeration-1.pdf (the course notes currently indexed).

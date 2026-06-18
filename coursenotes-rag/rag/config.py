@@ -1,0 +1,5 @@
+EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
+CHROMA_PATH = "./chroma_db"
+CONVERSATIONS_PATH = "./data/conversations"
+PDF_STORAGE_PATH = "./data/notes"
+GROQ_MODEL_NAME = "llama-3.3-70b-versatile"

@@ -14,14 +14,13 @@ from langchain.agents import create_agent
 from langchain.tools import tool
 
 from dotenv import load_dotenv
+from rag.config import CHROMA_PATH, EMBEDDING_MODEL_NAME, GROQ_MODEL_NAME
 
 
 
 load_dotenv()
 
-CHROMA_PATH = "./chroma_db"
-
-embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_NAME)
 # must match ingest.py — same model means same vector space
 
 def build_chain(collection_name: str = "course_notes"):
@@ -50,7 +49,7 @@ def build_chain(collection_name: str = "course_notes"):
         return serialized, retrieved_docs
 
     # temp = 0 means deterministic output
-    model = ChatGroq(model="llama-3.3-70b-versatile", temperature=0)
+    model = ChatGroq(model=GROQ_MODEL_NAME, temperature=0)
 
     # system prompt tells the agent when to use the tool and when not to.
     # The LaTeX instruction is important: without it the model defaults to ASCII
