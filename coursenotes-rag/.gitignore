@@ -3,5 +3,6 @@ data/notes/
 .env
 venv/
 __pycache__/
+data/conversations/
 *.pyc
 .DS_Store
