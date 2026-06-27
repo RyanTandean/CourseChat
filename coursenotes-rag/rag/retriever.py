@@ -1,8 +1,8 @@
-from langchain_chroma import Chroma
-# for loading the persisted index from disk, not creating a new one
+from langchain_postgres.vectorstores import PGVector
+# for loading the persisted index from Supabase, not creating a new one
 
 from langchain_huggingface import HuggingFaceEmbeddings
-# same embedding model and ChromaDB setup as ingest.py, we need the same embeddings object here to query the same vector space.
+# same embedding model as ingest.py — must match exactly so queries live in the same vector space.
 
 from langchain_groq import ChatGroq
 # Groq is free, runs on their hardware, for now atleast
@@ -14,21 +14,24 @@ from langchain.agents import create_agent
 from langchain.tools import tool
 
 from dotenv import load_dotenv
-from rag.config import CHROMA_PATH, EMBEDDING_MODEL_NAME, GROQ_MODEL_NAME
+import os
+from rag.config import EMBEDDING_MODEL_NAME, GROQ_MODEL_NAME
 
 
 
 load_dotenv()
 
+CONNECTION_STRING = os.getenv("SUPABASE_CONNECTION_STRING", "")
+
 embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_NAME)
 # must match ingest.py — same model means same vector space
 
 def build_chain(collection_name: str = "course_notes"):
-    db = Chroma(
-        persist_directory=CHROMA_PATH,
-        embedding_function=embeddings,  
+    db = PGVector(
+        connection=CONNECTION_STRING,
+        embeddings=embeddings,
         collection_name=collection_name
-    ) # load the persisted ChromaDB index from disk, using the same embeddings object to ensure we query the same vector space
+    ) # load the collection from Supabase using the same embeddings to query the same vector space
 
     # the agent calls this tool when it decides it needs context to answer
     # the docstring is important the agent reads it to decide when to call the tool

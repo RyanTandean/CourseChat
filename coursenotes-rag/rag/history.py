@@ -15,8 +15,12 @@
 
 import json
 import os
-import chromadb
-from rag.config import CHROMA_PATH, CONVERSATIONS_PATH
+import psycopg
+from dotenv import load_dotenv
+from rag.config import CONVERSATIONS_PATH
+
+load_dotenv()
+CONNECTION_STRING = os.getenv("SUPABASE_DB_URL", "")
 
 def _course_path(course_name: str) -> str:
     # sanitize course name to a safe filename
@@ -56,47 +60,63 @@ def clear_history(course_name: str) -> None:
         os.remove(path)
 
 def list_files(course_name: str) -> list[str]:
-    """Return the distinct filenames indexed in a course's ChromaDB collection.
+    """Return the distinct filenames indexed in a course's collection.
 
-    Each chunk stored at ingest time has a 'source' metadata field set to the
-    original PDF filename. We query the collection for all chunks, pull the
-    'source' field from each, and deduplicate — giving us the list of PDFs
-    currently indexed for this course.
-
-    Returns an empty list if the collection doesn't exist or has no chunks.
+    Queries langchain_pg_embedding for distinct cmetadata->>'source' values
+    belonging to the given collection. cmetadata is a jsonb column so we use
+    the ->> operator to extract the 'source' key as text.
     """
     try:
-        client = chromadb.PersistentClient(path=CHROMA_PATH)
-        collection = client.get_collection(course_name.replace(" ", "_"))
-        # get() with no filter returns all chunks; include=["metadatas"] skips
-        # fetching embeddings and documents — we only need the metadata dicts
-        result = collection.get(include=["metadatas"])
-        sources = {m["source"] for m in result["metadatas"] if "source" in m}
+        conn = psycopg.connect(CONNECTION_STRING)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT DISTINCT e.cmetadata->>'source'
+            FROM langchain_pg_embedding e
+            JOIN langchain_pg_collection c ON e.collection_id = c.uuid
+            WHERE c.name = %s
+            """,
+            (course_name,)
+        )
+        sources = [row[0] for row in cur.fetchall() if row[0]]
+        cur.close()
+        conn.close()
         return sorted(sources)
-    except Exception:
+    except Exception as e:
+        print(f"[list_files] query failed: {e}")
         return []
 
 
 def delete_file(course_name: str, filename: str) -> None:
     """Delete all chunks belonging to a single PDF from a course's collection.
 
-    Uses ChromaDB's delete() with a 'where' metadata filter on the 'source'
-    field — only chunks from this file are removed, leaving all other files
+    Deletes rows from langchain_pg_embedding where the collection matches
+    and cmetadata->>'source' matches the filename. Leaves all other files
     in the collection untouched.
 
     Also removes the saved PDF from data/notes/ so the sources panel doesn't
     try to render pages from a file that's no longer indexed.
     """
-    CHROMA_PATH    = "./chroma_db"
-    NOTES_PATH     = "./data/notes"
+    NOTES_PATH = "./data/notes"
 
     try:
-        client = chromadb.PersistentClient(path=CHROMA_PATH)
-        collection = client.get_collection(course_name.replace(" ", "_"))
-        # delete all chunks whose 'source' metadata matches this filename
-        collection.delete(where={"source": filename})
+        conn = psycopg.connect(CONNECTION_STRING)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            DELETE FROM langchain_pg_embedding e
+            USING langchain_pg_collection c
+            WHERE e.collection_id = c.uuid
+              AND c.name = %s
+              AND e.cmetadata->>'source' = %s
+            """,
+            (course_name, filename)
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
     except Exception as e:
-        print(f"[delete_file] ChromaDB delete failed for {filename}: {e}")
+        print(f"[delete_file] SQL delete failed for {filename}: {e}")
 
     # remove the saved PDF so page rendering doesn't find a stale file
     pdf_path = os.path.join(NOTES_PATH, filename)
@@ -108,39 +128,17 @@ def delete_file(course_name: str, filename: str) -> None:
 
 
 def list_courses() -> list[str]:
-    # ── Why ChromaDB is the source of truth, not the conversations folder ────
-    #
-    # Previously this function scanned data/conversations/ for JSON files.
-    # That caused two silent bugs:
-    #
-    #   1. Ingest a course, don't chat yet → no JSON file created → course never
-    #      appears in the sidebar even though vectors are fully indexed in ChromaDB
-    #
-    #   2. Delete or lose the JSON file (e.g. clearing the conversations folder)
-    #      → course vanishes from the sidebar, but all its vectors are still in
-    #      ChromaDB taking up space — orphaned and inaccessible
-    #
-    # The fix: use ChromaDB's collection list as the authoritative source.
-    # A course exists if and only if it has a ChromaDB collection. The JSON history
-    # file is optional — if it's missing we just start with an empty conversation.
-    #
-    # chromadb.PersistentClient loads the same on-disk database that ingest.py
-    # writes to. client.list_collections() returns all named collections.
-    # Each collection name was set to the course name at ingest time (with spaces
-    # replaced by underscores to satisfy ChromaDB's naming rules — we reverse that
-    # here to get the display name back).
-    #
-    # If ChromaDB doesn't exist yet (fresh install, no courses ingested) we return
-    # an empty list rather than crashing.
-
+    # langchain_pg_collection is the source of truth — one row per course.
+    # A course exists if and only if it has a collection in Supabase.
+    # The JSON history file is optional — missing just means empty conversation.
     try:
-        client = chromadb.PersistentClient(path=CHROMA_PATH)
-        # list_collections() returns a list of Collection objects
-        # each has a .name attribute — the collection name set at ingest time
-        collections = client.list_collections()
-        # reverse the underscore substitution applied at ingest time so the
-        # display name in the sidebar matches what the user originally typed
-        return [col.name.replace("_", " ") for col in collections]
-    except Exception:
-        # ChromaDB directory doesn't exist yet or is unreadable — no courses yet
+        conn = psycopg.connect(CONNECTION_STRING)
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM langchain_pg_collection")
+        courses = [row[0] for row in cur.fetchall()]
+        cur.close()
+        conn.close()
+        return courses
+    except Exception as e:
+        print(f"[list_courses] query failed: {e}")
         return []

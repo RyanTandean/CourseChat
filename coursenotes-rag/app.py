@@ -6,13 +6,12 @@
 import streamlit as st
 import os
 from rag.retriever import build_chain
-from rag.ingest import ingest_pdf
+from rag.ingest import ingest_pdf, _supabase, STORAGE_BUCKET
 from rag.history import load_history, save_history, clear_history, list_courses, list_files, delete_file
-import chromadb
 import tempfile
 import re
 import fitz  # PyMuPDF — used to render PDF pages as images for the sources panel
-from rag.config import CHROMA_PATH, PDF_STORAGE_PATH
+from rag.config import PDF_STORAGE_PATH
 
 # strip_markdown is currently unused — was previously used to flatten excerpt text
 # before passing to st.caption(). Replaced with st.markdown() so pymupdf4llm's
@@ -123,40 +122,42 @@ def normalise_latex(text: str) -> str:
 def render_pdf_page(source_filename: str, page_number: int) -> bytes | None:
     """Render a specific PDF page to PNG bytes for display with st.image().
 
+    Tries the local data/notes/ cache first. If the file isn't there (e.g. after
+    a Streamlit Cloud restart wiped the filesystem), fetches from Supabase Storage
+    and caches it locally so subsequent pages of the same PDF are fast.
+
     Args:
         source_filename: the PDF filename as stored in chunk metadata (e.g. "Enumeration-1.pdf")
         page_number:     1-indexed page number from chunk metadata
 
     Returns:
-        PNG image bytes, or None if the PDF file doesn't exist or rendering fails.
+        PNG image bytes, or None if the PDF can't be found or rendering fails.
         Callers should check for None and skip st.image() gracefully.
     """
     pdf_path = os.path.join(PDF_STORAGE_PATH, source_filename)
 
+    # fetch from Supabase Storage if not cached locally
     if not os.path.exists(pdf_path):
-        # PDF not found — either the file was deleted, or this is an older course
-        # indexed before page rendering was added. Fail silently.
-        return None
+        try:
+            pdf_bytes = _supabase.storage.from_(STORAGE_BUCKET).download(source_filename)
+            os.makedirs(PDF_STORAGE_PATH, exist_ok=True)
+            with open(pdf_path, "wb") as f:
+                f.write(pdf_bytes)
+        except Exception as e:
+            print(f"[page render] could not fetch {source_filename} from Storage: {e}")
+            return None
 
     try:
-        doc  = fitz.open(pdf_path)
-        # fitz uses 0-indexed pages; chunk metadata uses 1-indexed
-        page = doc[page_number - 1]
-
-        # render at 1.5x resolution — crisp enough for reading, smaller than 2x
-        # Matrix(1.5, 1.5) scales both x and y by 1.5
+        doc    = fitz.open(pdf_path)
+        page   = doc[page_number - 1]  # fitz is 0-indexed
         zoom   = 1.5
         matrix = fitz.Matrix(zoom, zoom)
         pixmap = page.get_pixmap(matrix=matrix)
-
-        # tobytes("png") converts the pixmap to PNG bytes in memory —
-        # no temp file needed, st.image() accepts raw bytes directly
         image_bytes = pixmap.tobytes("png")
         doc.close()
         return image_bytes
 
     except Exception as e:
-        # page out of range, corrupted PDF, etc. — fail gracefully
         print(f"[page render] {source_filename} page {page_number} could not be rendered: {e}")
         return None
 
@@ -249,8 +250,22 @@ def switch_course(course_name: str):
 def delete_course(course_name: str):
     clear_history(course_name)
     try:
-        client = chromadb.PersistentClient(path=CHROMA_PATH)
-        client.delete_collection(course_name.replace(" ", "_"))
+        import psycopg
+        conn = psycopg.connect(os.getenv("SUPABASE_DB_URL", ""))
+        cur = conn.cursor()
+        # delete all embeddings then the collection row
+        cur.execute(
+            """
+            DELETE FROM langchain_pg_embedding e
+            USING langchain_pg_collection c
+            WHERE e.collection_id = c.uuid AND c.name = %s
+            """,
+            (course_name,)
+        )
+        cur.execute("DELETE FROM langchain_pg_collection WHERE name = %s", (course_name,))
+        conn.commit()
+        cur.close()
+        conn.close()
     except Exception as e:
         print(f"[delete_course] could not delete collection for {course_name}: {e}")
     if course_name in st.session_state.agents:

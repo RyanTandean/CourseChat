@@ -22,13 +22,12 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 # we pass chunk_size=800 (max chars per chunk) and chunk_overlap=100
 # (consecutive chunks share 100 chars so concepts at boundaries appear in both)
 
-from langchain_chroma import Chroma
-# LangChain's wrapper around ChromaDB.
-# ChromaDB is a vector database where it stores text chunks alongside their embedding vectors
-# and lets us query "which stored vectors are closest to this query vector?"
-# using cosine similarity. persists to disk so we don't re-ingest on every run.
-# Cosine similarity: a measure of similarity between two vectors that calculates the cosine of the angle between them.
-# Indifferent to magnitude, focuses on direction
+from langchain_postgres.vectorstores import PGVector
+# LangChain's wrapper around PostgreSQL + pgvector.
+# Replaces ChromaDB — vectors now stored in Supabase instead of local disk.
+# Identical interface to Chroma: from_documents(), similarity_search(), get() all work the same way.
+# Collection isolation (one per course) is handled by the collection_name parameter,
+# which maps to a row in langchain_pg_collection in Supabase.
 
 from langchain_huggingface import HuggingFaceEmbeddings
 # loads a local sentence embedding model (all-MiniLM-L6-v2, 384 dimensions).
@@ -49,13 +48,23 @@ import os
 import re
 import base64
 import time
+from supabase import create_client, Client
 
 load_dotenv()
 # authenticates with HuggingFace Hub to get higher rate limits when downloading the embedding model.
 os.environ["HUGGINGFACEHUB_API_TOKEN"] = os.getenv("HF_TOKEN", "")
 
-CHROMA_PATH = "./chroma_db"
-NOTES_PATH  = "./data/notes"
+CONNECTION_STRING = os.getenv("SUPABASE_CONNECTION_STRING", "")
+NOTES_PATH        = "./data/notes"
+STORAGE_BUCKET    = "course-pdfs"
+
+# Supabase client for Storage — used to upload PDFs at ingest time and
+# download them at query time for page image rendering.
+# Uses the service role key so it can read/write without RLS restrictions.
+_supabase: Client = create_client(
+    os.getenv("SUPABASE_URL", ""),
+    os.getenv("SUPABASE_SERVICE_KEY", "")
+)
 
 ############# Page image storage ####################
 #
@@ -304,9 +313,22 @@ def ingest_pdf(filepath: str, collection_name: str = "course_notes", original_fi
     os.makedirs(PDF_STORAGE_PATH, exist_ok=True)
     saved_pdf_path = os.path.join(PDF_STORAGE_PATH, source_name)
     if not os.path.exists(saved_pdf_path):
-        # only copy if not already there — avoids overwriting on re-ingest attempts
         import shutil
         shutil.copy2(filepath, saved_pdf_path)
+
+    # Upload to Supabase Storage so the PDF survives container restarts on
+    # Streamlit Cloud. The bucket path is just the filename — no subdirectories.
+    # upsert=True means re-uploading the same file is safe (no error, just overwrites).
+    try:
+        with open(saved_pdf_path, "rb") as f:
+            result = _supabase.storage.from_(STORAGE_BUCKET).upload(
+                path=source_name,
+                file=f.read(),
+                file_options={"content-type": "application/pdf", "upsert": "true"}
+            )
+        print(f"[ingest] uploaded {source_name} to Supabase Storage: {result}")
+    except Exception as e:
+        print(f"[ingest] WARNING: could not upload {source_name} to Supabase Storage: {type(e).__name__}: {e}")
 
     # ── Deduplication check ──────────────────────────────────────────────────
     #
@@ -326,9 +348,9 @@ def ingest_pdf(filepath: str, collection_name: str = "course_notes", original_fi
     # already stored in metadata and is sufficient for the common case: a user
     # accidentally clicking "Upload & Index" twice on the same file.
     try:
-        existing_db = Chroma(
-            persist_directory=CHROMA_PATH,
-            embedding_function=embeddings,
+        existing_db = PGVector(
+            connection=CONNECTION_STRING,
+            embeddings=embeddings,
             collection_name=collection_name
         )
         existing = existing_db.get(where={"source": source_name}, limit=1)
@@ -415,12 +437,12 @@ def ingest_pdf(filepath: str, collection_name: str = "course_notes", original_fi
     #
     # from_documents() does three things:
     #   1. calls embeddings.embed_documents() on each chunk's page_content
-    #   2. stores the resulting vectors alongside the text and metadata in ChromaDB
-    #   3. persists everything to disk at CHROMA_PATH
-    db = Chroma.from_documents(
+    #   2. stores the resulting vectors alongside the text and metadata in Supabase
+    #   3. creates langchain_pg_collection and langchain_pg_embedding tables if they don't exist
+    db = PGVector.from_documents(
         chunks,
         embeddings,
-        persist_directory=CHROMA_PATH,
+        connection=CONNECTION_STRING,
         collection_name=collection_name
     )
 

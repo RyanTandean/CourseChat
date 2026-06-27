@@ -1,8 +1,8 @@
 from rag.retriever import build_chain
 
-# Calls build_chain from rag.retriever to initializes ChromaDB, the embedding model, the Groq LLM,
+# Calls build_chain from rag.retriever to initialize PGVector, the embedding model, the Groq LLM,
 # the retrieve_context tool, and wires them into a create_agent agent.
-# Recall: Agent for answering, db incase we need ChromaDB later
+# Recall: Agent for answering, db in case we need the vector store later
 agent, db = build_chain()
 
 print("CourseChat CLI Test — type 'quit' to exit\n")
